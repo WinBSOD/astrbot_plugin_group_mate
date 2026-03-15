@@ -13,7 +13,7 @@ from astrbot.api.star import Star, StarTools, register
 from astrbot.core.provider.entities import ProviderType
 
 
-@register("group_mate", "WinBSOD", "提供有趣的群友社交功能", "1.4")
+@register("group_mate", "WinBSOD", "提供有趣的群友社交功能", "1.5")
 class GroupMatePlugin(Star):
     def __init__(self, context, config: dict = None):
         super().__init__(context)
@@ -363,6 +363,10 @@ class GroupMatePlugin(Star):
         self, event: AstrMessageEvent, action: str = None, value: str = None
     ):
         """管理员控制台指令。"""
+        # 鲁棒性增强：确保输入参数为字符串并一致化处理
+        action = str(action).lower() if action is not None else None
+        value = str(value) if value is not None else None
+
         if not event.is_admin():
             yield event.plain_result("❌ 权限不足，该指令仅限管理员使用。")
             return
@@ -399,7 +403,7 @@ class GroupMatePlugin(Star):
                 yield event.plain_result("❌ 请输入有效数字。")
                 return
         else:
-            val_norm = value.lower()
+            val_norm = str(value).lower()
             if val_norm in ["on", "true", "1"]:
                 target_val = True
             elif val_norm in ["off", "false", "0"]:
@@ -416,5 +420,5 @@ class GroupMatePlugin(Star):
         if cat not in self.config:
             self.config[cat] = {}
         self.config[cat][key] = target_val
-        self.context.config_manager.save_config()
+        self.config.save_config()
         yield event.plain_result(f"✅ 已将 {action} 设置为 {target_val}，且已持久化。")
