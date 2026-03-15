@@ -1,21 +1,19 @@
 import asyncio
 import json
-import os
 import random
 import time
 from datetime import datetime, timezone
-from typing import Tuple
+from pathlib import Path
 
-# 显式从特定命名空间导入
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.platform import MessageType
-from astrbot.api.star import Star, register, StarTools
 from astrbot.api import logger
-from astrbot.api.message_components import At, Plain, Image
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import At, Image, Plain
+from astrbot.api.platform import MessageType
+from astrbot.api.star import Star, StarTools, register
 from astrbot.core.provider.entities import ProviderType
 
 
-@register("group_mate", "WinBSOD", "提供有趣的群友社交功能", "1.1")
+@register("group_mate", "WinBSOD", "提供有趣的群友社交功能", "1.2")
 class GroupMatePlugin(Star):
     def __init__(self, context, config: dict = None):
         super().__init__(context)
@@ -23,17 +21,16 @@ class GroupMatePlugin(Star):
         # 并发控制：引入异步锁保护共享状态，防止 read-modify-write 竞态
         self.lock = asyncio.Lock()
 
-        # 规范数据目录获取：使用 StarTools.get_data_dir()
-        # StarTools.get_data_dir 返回的是字符串路径或 Path 对象，框架内通常保持一致性
-        self.data_dir = StarTools.get_data_dir()
-        if not os.path.exists(self.data_dir):
-            os.makedirs(self.data_dir)
-        self.data_file = os.path.join(self.data_dir, "data.json")
+        # 规范数据目录获取使用 StarTools.get_data_dir()
+        # 完全拥抱面向对象的 pathlib，避免 Path 与 str 混用
+        self.data_dir: Path = StarTools.get_data_dir()
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.data_file = self.data_dir / "data.json"
         self.data = self._load_data()
 
     def _load_data(self) -> dict:
         """从持久化文件加载运行数据"""
-        if os.path.exists(self.data_file):
+        if self.data_file.exists():
             try:
                 with open(self.data_file, encoding="utf-8") as f:
                     return json.load(f)
@@ -42,7 +39,7 @@ class GroupMatePlugin(Star):
         return {"last_run_time": {}}
 
     async def _save_data(self):
-        """保存运行数据到持久化文件（异步安全，需在 lock 保护下调用）"""
+        """保存运行数据到持久化文件（需在调用时确保并发安全）"""
         try:
             with open(self.data_file, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
@@ -62,8 +59,8 @@ class GroupMatePlugin(Star):
                 return 5.0
         return val
 
-    def is_in_cooldown(self, user_id: str) -> Tuple[bool, int]:
-        """检查用户是否处于指令冷却期"""
+    def _is_in_cooldown(self, user_id: str) -> tuple[bool, int]:
+        """检查用户是否处于指令冷却期（辅助方法，应在 lock 保护下调用）"""
         cd = self._get_conf("basic_settings", "cooldown", 60)
         now = time.time()
         last_run_time = self.data.get("last_run_time", {})
@@ -73,7 +70,7 @@ class GroupMatePlugin(Star):
                 return True, int(cd - elapsed)
         return False, 0
 
-    async def get_ai_response(self, category: str, **kwargs) -> str:
+    async def _get_ai_response(self, category: str, **kwargs) -> str:
         """核心回复获取逻辑，具备重试与异步非阻塞调用，支持 AI 失败兜底"""
         DEFAULTS = {
             "success_result": {
@@ -132,7 +129,8 @@ class GroupMatePlugin(Star):
                 return text.format(**vars)
             except Exception as e:
                 logger.error(f"[group_mate] 变量格式化失败 ({category}): {e}")
-                return text
+                # 安全兜底：如果格式化失败，返回固定语库中的第一条，防止暴露原始模板占位符
+                return fixed_sentences[0] if fixed_sentences else "缘分莫测，稍后再试。"
 
         if use_llm:
             if not prompt_template:
@@ -158,131 +156,129 @@ class GroupMatePlugin(Star):
             return safe_format(random.choice(fixed_sentences), kwargs)
         return safe_format(random.choice(fixed_sentences), kwargs)
 
-    # 符合规范的事件装饰器使用 filter.command
+    async def _select_target(
+        self, event: AstrMessageEvent, user_id: str
+    ) -> object | None:
+        """从群成员中根据活跃度挑选目标（逻辑解耦）"""
+        group_id = event.get_group_id()
+        platform_id = event.get_platform_id()
+        history_size = self._get_conf("basic_settings", "history_size", 200)
+
+        # 1. 获取群消息历史
+        try:
+            history = await self.context.message_history_manager.get(
+                platform_id, group_id, page_size=history_size
+            )
+        except Exception as e:
+            logger.error(f"[group_mate] 获取群消息历史失败: {e}")
+            history = []
+
+        # 2. 活跃度分析与时区标准化
+        # 针对潜在的东八区/本地时间问题，通常框架返回的已是 Aware DateTime，
+        # 如果是 Naive，假设为本地时间并转换至 UTC 进行统一计算。
+        now_dt = datetime.now(timezone.utc)
+        activity_counts = {}
+        last_seen = {}
+
+        for msg_item in history:
+            uid = msg_item.sender_id
+            if uid:
+                activity_counts[uid] = activity_counts.get(uid, 0) + 1
+                msg_time = msg_item.created_at
+                if msg_time:
+                    if msg_time.tzinfo is None:
+                        # naive datetime 时区转换：假定为本地时间转回 UTC
+                        msg_time = msg_time.astimezone(timezone.utc)
+                    if uid not in last_seen or msg_time > last_seen[uid]:
+                        last_seen[uid] = msg_time
+
+        # 3. 获取群成员
+        try:
+            group_obj = await event.get_group()
+        except Exception as e:
+            logger.error(f"[group_mate] 获取群成员列表失败: {e}")
+            return None
+
+        if not group_obj or not group_obj.members:
+            return None
+
+        members = [m for m in group_obj.members if m.user_id != user_id]
+        if not members:
+            return None
+
+        # 4. 分层回溯选择逻辑
+        target_pool = members
+        if self._get_conf("basic_settings", "use_multi_tier_fallback", True):
+            tier1, tier2 = [], []
+            for m in members:
+                m_last_time = last_seen.get(m.user_id)
+                if m_last_time:
+                    diff = (now_dt - m_last_time).total_seconds()
+                    if diff <= 3 * 86400:
+                        tier1.append(m)
+                    if diff <= 7 * 86400:
+                        tier2.append(m)
+            if tier1:
+                target_pool = tier1
+            elif tier2:
+                target_pool = tier2
+
+        weights = [activity_counts.get(m.user_id, 0) + 1 for m in target_pool]
+        return random.choices(target_pool, weights=weights, k=1)[0]
+
     @filter.command("娶群友")
     async def marry(self, event: AstrMessageEvent):
         """娶一位群友作为老婆/老公。"""
         try:
             if event.get_message_type() != MessageType.GROUP_MESSAGE:
-                msg = await self.get_ai_response("not_group_remind")
+                msg = await self._get_ai_response("not_group_remind")
                 yield event.plain_result(msg)
                 return
 
             user_id = event.get_sender_id()
             user_name = event.get_sender_name()
 
-            # 指令状态锁定：防止并发竞态
+            # 指令锁定与并发绕过防护
             async with self.lock:
-                in_cd, remain = self.is_in_cooldown(user_id)
+                in_cd, remain = self._is_in_cooldown(user_id)
                 if in_cd:
-                    msg = await self.get_ai_response(
+                    msg = await self._get_ai_response(
                         "cooldown_remind", user=user_name, remain=remain
                     )
                     yield event.plain_result(msg)
                     return
 
+                # 随机失败判定
                 prob = (
                     self._get_conf("basic_settings", "random_fail_probability", 5.0)
                     / 100.0
                 )
                 if prob > 0 and random.random() < prob:
+                    # 立即更新时间，防止并发绕过
                     self.data.setdefault("last_run_time", {})[user_id] = time.time()
                     await self._save_data()
-                    msg = await self.get_ai_response("random_fail", user=user_name)
+                    msg = await self._get_ai_response("random_fail", user=user_name)
                     yield event.plain_result(msg)
                     return
 
-            # 获取群消息历史用于活跃度算法
-            group_id = event.get_group_id()
-            platform_id = event.get_platform_id()
-            history_size = self._get_conf("basic_settings", "history_size", 200)
-
-            try:
-                history = await self.context.message_history_manager.get(
-                    platform_id, group_id, page_size=history_size
-                )
-            except Exception as e:
-                logger.error(f"[group_mate] 获取群消息历史失败: {e}")
-                history = []
-
-            # 标准化数据处理：确保时区一致性 (Timezone-Aware)
-            now_dt = datetime.now(timezone.utc)
-            activity_counts = {}
-            last_seen = {}
-
-            for msg_item in history:
-                uid = msg_item.sender_id
-                if uid:
-                    activity_counts[uid] = activity_counts.get(uid, 0) + 1
-                    msg_time = msg_item.created_at
-                    # 确保 msg_time 为 Aware Datetime
-                    if msg_time and msg_time.tzinfo is None:
-                        msg_time = msg_time.replace(tzinfo=timezone.utc)
-
-                    if uid not in last_seen or (
-                        msg_time and (not last_seen[uid] or msg_time > last_seen[uid])
-                    ):
-                        last_seen[uid] = msg_time
-
-            # 抽取目标池构建
-            try:
-                group_obj = await event.get_group()
-            except Exception as e:
-                logger.error(f"[group_mate] 获取群成员列表失败: {e}")
-                msg = await self.get_ai_response("system_error_remind")
-                yield event.plain_result(msg)
-                return
-
-            if not group_obj or not group_obj.members:
-                msg = await self.get_ai_response("system_error_remind")
-                yield event.plain_result(msg)
-                return
-
-            members = [m for m in group_obj.members if m.user_id != user_id]
-            if not members:
-                msg = await self.get_ai_response("system_error_remind")
-                yield event.plain_result(msg)
-                return
-
-            # 活跃度回溯算法
-            target_pool = members
-            if self._get_conf("basic_settings", "use_multi_tier_fallback", True):
-                tier1, tier2 = [], []
-                for m in members:
-                    m_last_time = last_seen.get(m.user_id)
-                    if m_last_time:
-                        if not isinstance(m_last_time, datetime):
-                            m_last_time = datetime.fromtimestamp(
-                                m_last_time, tz=timezone.utc
-                            )
-                        elif m_last_time.tzinfo is None:
-                            m_last_time = m_last_time.replace(tzinfo=timezone.utc)
-
-                        diff = (now_dt - m_last_time).total_seconds()
-                        if diff <= 3 * 86400:
-                            tier1.append(m)
-                        if diff <= 7 * 86400:
-                            tier2.append(m)
-                if tier1:
-                    target_pool = tier1
-                elif tier2:
-                    target_pool = tier2
-
-            weights = [activity_counts.get(m.user_id, 0) + 1 for m in target_pool]
-            target = random.choices(target_pool, weights=weights, k=1)[0]
-
-            # 更新状态并持久化
-            async with self.lock:
+                # 正常流程：立即先行更新冷却占位，防止后续耗时操作导致的重入漏洞
                 self.data.setdefault("last_run_time", {})[user_id] = time.time()
                 await self._save_data()
 
-            success_msg = await self.get_ai_response(
+            # 选定目标（解耦模型）
+            target = await self._select_target(event, user_id)
+            if not target:
+                msg = await self._get_ai_response("system_error_remind")
+                yield event.plain_result(msg)
+                return
+
+            success_msg = await self._get_ai_response(
                 "success_result",
                 user=user_name,
                 target=target.nickname or target.user_id,
             )
 
-            # 组合响应链
+            # 消息链拼装
             chain = [
                 At(qq=user_id),
                 Plain(" "),
@@ -295,7 +291,7 @@ class GroupMatePlugin(Star):
 
         except Exception as e:
             logger.error(f"[group_mate] 运行异常: {e}", exc_info=True)
-            msg = await self.get_ai_response(
+            msg = await self._get_ai_response(
                 "system_error_remind", user=event.get_sender_name()
             )
             yield event.plain_result(msg)
@@ -319,7 +315,10 @@ class GroupMatePlugin(Star):
         }
 
         if not action or (action not in mapping and action != "prob") or value is None:
-            help_msg = "💡 【星洛智萌_群友眷属 管理员控制台】\n用法: /gm_admin [项目] [on/off/数值]\n\n项目: success, fail, cd, privacy, error, fallback (on/off)\n特殊: prob (0-100)\n\n当前状态:\n"
+            help_msg = (
+                "💡 【星洛智萌_群友眷属 管理员控制台】\n用法: /gm_admin [项目] [on/off/数值]\n\n"
+                "项目: success, fail, cd, privacy, error, fallback (on/off)\n特殊: prob (0-100)\n\n当前状态:\n"
+            )
             for k, (cat, key) in mapping.items():
                 status = "ON" if self._get_conf(cat, key, True) else "OFF"
                 help_msg += f"- {k}: {status}\n"
@@ -347,7 +346,6 @@ class GroupMatePlugin(Star):
                 yield event.plain_result(f"❌ 非法布尔值: {value}。请使用 on/off。")
                 return
 
-        # 应用配置并持久化：使用框架标准的 save_config
         cat, key = (
             mapping[action]
             if action != "prob"
@@ -356,6 +354,7 @@ class GroupMatePlugin(Star):
         if cat not in self.config:
             self.config[cat] = {}
         self.config[cat][key] = target_val
-        self.context.config_manager.save_config()
 
+        # 显式保存框架配置，确保动态变更持久化
+        self.context.config_manager.save_config()
         yield event.plain_result(f"✅ 已将 {action} 设置为 {target_val}，且已持久化。")
