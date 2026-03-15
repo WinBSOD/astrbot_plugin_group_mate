@@ -1,0 +1,196 @@
+{
+  "basic_settings": {
+    "title": "⚙️ 基础功能设置",
+    "description": "插件核心运行参数配置。",
+    "type": "object",
+    "items": {
+      "cooldown": {
+        "title": "指令冷却 (秒)",
+        "description": "【冷却系统】防止刷屏的指令触发间隔。",
+        "type": "int",
+        "default": 60,
+        "hint": "建议设为 60 秒以上。"
+      },
+      "random_fail_probability": {
+        "title": "随机落空概率 (%)",
+        "description": "【落空机制】触发抽取失败的概率 (0-100)。",
+        "type": "float",
+        "default": 5.0,
+        "slider": {
+          "min": 0,
+          "max": 100,
+          "step": 1
+        },
+        "hint": "设为 0 则关闭落空，100 则必定失败。"
+      },
+      "history_size": {
+        "title": "活跃度参考消息数",
+        "description": "【回溯算法】计算活跃度权重参考的消息数量。",
+        "type": "int",
+        "default": 200
+      },
+      "use_multi_tier_fallback": {
+        "title": "活跃成员回溯",
+        "description": "【回溯算法】优先在 3/7 天活跃成员中抽取的逻辑开关。",
+        "type": "bool",
+        "default": true
+      },
+      "llm_retry_limit": {
+        "title": "LLM 重试限制",
+        "description": "【AI 引擎】API 响应失败后的最大自动重试次数。",
+        "type": "int",
+        "default": 2,
+        "hint": "重试失败后将使用对应的固定话术库兜底。"
+      }
+    }
+  },
+  "success_result": {
+    "title": "🎉 【1. 抽中结果】定制",
+    "description": "成功抽中群友时的回复逻辑。",
+    "type": "object",
+    "items": {
+      "mode": {
+        "title": "使用 AI 生成回复",
+        "description": "【成功场景】使用 AI 回复，关闭则使用固定话术。",
+        "type": "bool",
+        "default": true
+      },
+      "prompt": {
+        "title": "AI 提示词",
+        "description": "【成功场景】AI 生成回复时的系统引导词。",
+        "type": "string",
+        "default": "你是一个幽默且擅长牵红线的月老。现在用户 {user} 抽中了群友 {target} 作为今日老婆。请生成一段恭喜或调侃的话，要简短精炼，不要输出多余的内容。",
+        "hint": "变量: {user}, {target}"
+      },
+      "fixed": {
+        "title": "固定话术池",
+        "description": "【成功场景】固定回复内容库，支持一行一条。",
+        "type": "list",
+        "default": [
+          "这就是你的今日真命天子/天女吗？",
+          "恭喜你，和这位群友结缘了！",
+          "缘分天注定，快去看看你的新老婆吧！"
+        ]
+      }
+    }
+  },
+  "random_fail": {
+    "title": "🤷 【2. 随机落空】定制",
+    "description": "由于 5% 概率落空时的回复逻辑。",
+    "type": "object",
+    "items": {
+      "mode": {
+        "title": "使用 AI 响应",
+        "description": "【落空场景】使用 AI 回复，关闭则使用固定话术。",
+        "type": "bool",
+        "default": true
+      },
+      "prompt": {
+        "title": "AI 提示词",
+        "description": "【落空场景】AI 生成回复时的系统引导词。",
+        "type": "string",
+        "default": "你是一个毒舌且幽默的月老。用户试图抽老婆但由于运气极差失败了。请生成一句话嘲笑他“单身一辈子”或者“醒醒吧”，要简短精炼。",
+        "hint": "变量: {user}"
+      },
+      "fixed": {
+        "title": "固定话术池",
+        "description": "【落空场景】固定回复内容库，支持一行一条。",
+        "type": "list",
+        "default": [
+          "醒醒，你根本没有老婆！",
+          "月老看你太可怜，都不想给你牵线了。",
+          "今天的桃花运被隔壁王大爷借走了。"
+        ]
+      }
+    }
+  },
+  "cooldown_remind": {
+    "title": "⏳ 【3. 指令冷却】定制",
+    "description": "用户处于冷却期触发指令时的回复逻辑。",
+    "type": "object",
+    "items": {
+      "mode": {
+        "title": "使用 AI 响应",
+        "description": "【冷却场景】使用 AI 回复，关闭则使用固定话术。",
+        "type": "bool",
+        "default": true
+      },
+      "prompt": {
+        "title": "AI 提示词",
+        "description": "【冷却场景】AI 生成回复时的系统引导词。",
+        "type": "string",
+        "default": "你是一个毒舌且幽默的机器人。用户在试图频繁使用“娶群友”指令，现在正处于冷却中。请生成一句话来调侃下他，回复需要很简短精炼。",
+        "hint": "变量: {user}, {remain}"
+      },
+      "fixed": {
+        "title": "固定话术池",
+        "description": "【冷却场景】固定回复内容库，支持一行一条。",
+        "type": "list",
+        "default": [
+          "心急吃不了热豆腐，请在 {remain} 秒后再尝试。",
+          "别急啊，月老也需要休息的。",
+          "频率太快了，你是想把月老的红线搓出火星子吗？"
+        ]
+      }
+    }
+  },
+  "not_group_remind": {
+    "title": "🏘️ 【4. 环境限制】定制",
+    "description": "告知非群聊不可用时的回复逻辑。",
+    "type": "object",
+    "items": {
+      "mode": {
+        "title": "使用 AI 响应",
+        "description": "【非群聊场景】使用 AI 回复，关闭则使用固定话术。",
+        "type": "bool",
+        "default": true
+      },
+      "prompt": {
+        "title": "AI 提示词",
+        "description": "【非群聊场景】AI 生成回复时的系统引导词。",
+        "type": "string",
+        "default": "你是一个高冷的管家。用户在私聊中试图使用群功能。请生成一句话告诉他这需要在群里玩，带点调侃，不要太死板。"
+      },
+      "fixed": {
+        "title": "固定话术池",
+        "description": "【非群聊场景】固定回复内容库，支持一行一条。",
+        "type": "list",
+        "default": [
+          "该功能仅限群聊使用，私聊可找不到老婆哦。",
+          "去群里展示你的桃花运吧，这里没人看。",
+          "私聊禁止“娶群友”，请自重。"
+        ]
+      }
+    }
+  },
+  "system_error_remind": {
+    "title": "🛠️ 【5. 系统错误】定制",
+    "description": "发生程序错误或无法获取成员时的回复逻辑。",
+    "type": "object",
+    "items": {
+      "mode": {
+        "title": "使用 AI 响应",
+        "description": "【错误场景】使用 AI 回复，关闭则使用固定话术。",
+        "type": "bool",
+        "default": true
+      },
+      "prompt": {
+        "title": "AI 提示词",
+        "description": "【错误场景】AI 生成回复时的系统引导词。",
+        "type": "string",
+        "default": "你是一个倒霉的程序员。现在插件出 Bug 了。请生成一句话自嘲并请用户稍后再试，要简短。",
+        "hint": "变量: {user}"
+      },
+      "fixed": {
+        "title": "固定话术池",
+        "description": "【错误场景】固定回复内容库，支持一行一条。",
+        "type": "list",
+        "default": [
+          "哎呀，月老把红线扯断了...请稍后再试。",
+          "系统开小差了，桃花运暂时离你而去了。",
+          "服务器正在重启中，请不要在危险边缘试探。"
+        ]
+      }
+    }
+  }
+}

@@ -1,14 +1,86 @@
-# astrbot-plugin-helloworld
+# 🎭 星洛智萌 - 群友眷属 (Group Mate)
 
-AstrBot 插件模板 / A template plugin for AstrBot plugin feature
+[![AstrBot](https://img.shields.io/badge/AstrBot-v4.19.5+-blue.svg)](https://github.com/Soulter/AstrBot)
+[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-orange.svg)](LICENSE)
 
-> [!NOTE]
-> This repo is just a template of [AstrBot](https://github.com/AstrBotDevs/AstrBot) Plugin.
-> 
-> [AstrBot](https://github.com/AstrBotDevs/AstrBot) is an agentic assistant for both personal and group conversations. It can be deployed across dozens of mainstream instant messaging platforms, including QQ, Telegram, Feishu, DingTalk, Slack, LINE, Discord, Matrix, etc. In addition, it provides a reliable and extensible conversational AI infrastructure for individuals, developers, and teams. Whether you need a personal AI companion, an intelligent customer support agent, an automation assistant, or an enterprise knowledge base, AstrBot enables you to quickly build AI applications directly within your existing messaging workflows.
+一个为 AstrBot 量身打造的高级群社交增强插件。不仅能帮你“娶”到心仪的群友，更融入了具身智能对话与多维度活跃度筛选算法，让群聊互动更具真实感与趣味性。
 
-# Supports
+---
 
-- [AstrBot Repo](https://github.com/AstrBotDevs/AstrBot)
-- [AstrBot Plugin Development Docs (Chinese)](https://docs.astrbot.app/dev/star/plugin-new.html)
-- [AstrBot Plugin Development Docs (English)](https://docs.astrbot.app/en/dev/star/plugin-new.html)
+## ✨ 核心功能
+
+### 💍 缘分抽取 (Marriage System)
+- **智能权重筛选**：并非简单的随机。系统通过分析群消息历史，赋予活跃用户更高权重，确保你抽到的是经常互动的好友。
+- **多级活跃回溯**：优先从 3 天或 7 天内活跃的成员中挑选，告别“抽到失踪人口”的尴尬。
+
+### 🧠 全量 AI 驱动 (AI-First Experience)
+- **具身智能对话**：内置 5 大交互场景（抽中、落空、冷却、环境受限、系统错误），全部支持 LLM 动态生成回复。
+- **场景化 Prompt**：为每个场景预设了各具特色的 AI 人格（如：幽默月老、毒舌管家、倒霉程序员），支持用户高度自定义。
+- **智能兜底**：若 AI 服务暂时不可用，会自动无缝切换至预设的固定话术库，确保 100% 响应。
+
+### 🎮 游戏化机制
+- **可调落空概率**：配置中心支持 0-100% 概率滑块。偶尔的“没娶到”能显著提升成功时的喜悦感。
+- **指令冷却 (CD)**：防止刷屏，维护群聊秩序，带有调侃式的冷却提醒。
+
+---
+
+## 🚀 快速开始
+
+### 安装
+你可以直接在 AstrBot 的插件市场中搜索`星洛智萌_群友眷属`进行安装。
+
+或者按下列方法手动安装：
+1. 下载本项目并放入 AstrBot 的 `data/plugins/` 目录。
+2. 重启 AstrBot。
+
+### 使用指令
+在群聊中发送以下任意指令即可触发：
+- `/娶群友` (主指令)
+- 别名：`谁是我老婆`, `抽老婆`, `绑架群友`, `哪个群友是我老婆`, `娶老婆`, `拐卖人口` 等。
+
+---
+
+## 🛠️ 管理员控制台 (gm_admin)
+
+管理员可通过指令实时调谐插件行为，无需重启：
+
+| 指令 | 说明 | 参数示例 |
+| :--- | :--- | :--- |
+| `/gm_admin` | 查看当前所有开关状态与概率设置 | - |
+| `/gm_admin success on/off` | 切换“抽中结果”是否使用 AI | `/gm_admin success off` |
+| `/gm_admin prob [0-100]` | 动态设置随机落穿概率 | `/gm_admin prob 20` |
+| `/gm_admin fallback on/off` | 是否启用活跃成员回溯算法 | `/gm_admin fallback on` |
+
+*支持的项目还包括：`fail`, `cd`, `privacy`, `error` 的 AI 模式切换。*
+
+---
+
+## ⚙️ 配置中心 (WebUI)
+
+插件提供了**层级化、嵌套式**的配置界面，分为以下五大模块：
+
+1. **基础功能设置**：冷却时间、历史回溯深度、AI 重试限制、落空概率滑块。
+2. **抽中结果定制**：AI 开关、Prompt 自定义、固定语库编辑。
+3. **随机落空定制**：独立于抽中的 AI 策略与语库。
+4. **提醒类定制**：针对冷却期、非群聊环境、系统异常的专项配置。
+
+---
+
+## ⏳尚未实现的功能
+
+- 可选是否锁定当天老婆
+- 发起表白/娶特定群友/询问被娶群友是否同意
+- 娶群友排行榜
+- 娶群友历史记录
+- 发起离婚/询问对方是否同意离婚
+
+
+---
+
+## 🤝 贡献与反馈
+
+如果您有更好的创意或发现了 Bug，欢迎提交 Issue 或 Pull Request。
+
+- **Author**: WinBSOD
+- **Special Thanks**: 感谢 [liulian-plugin](https://github.com/flyingmangocat/liulian-plugin) 提供的最初灵感。

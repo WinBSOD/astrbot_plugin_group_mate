@@ -1,0 +1,2 @@
+# AstrBot Plugin Dependencies
+# 本插件主要使用 AstrBot 核心 API，暂无外部第三方库依赖。
