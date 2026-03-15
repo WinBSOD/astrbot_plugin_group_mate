@@ -8,17 +8,17 @@ from pathlib import Path
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import At, Image, Plain
-from astrbot.api.platform import MessageType
+from astrbot.api.platform import MessageMember, MessageType
 from astrbot.api.star import Star, StarTools, register
 from astrbot.core.provider.entities import ProviderType
 
 
-@register("group_mate", "WinBSOD", "提供有趣的群友社交功能", "1.2")
+@register("group_mate", "WinBSOD", "提供有趣的群友社交功能", "1.4")
 class GroupMatePlugin(Star):
     def __init__(self, context, config: dict = None):
         super().__init__(context)
         self.config = config or {}
-        # 并发控制：引入异步锁保护共享状态，防止 read-modify-write 竞态
+        # 并发控制：异步锁仅用于保护数据读写状态，严禁在锁内执行长耗时/网络 I/O
         self.lock = asyncio.Lock()
 
         # 规范数据目录获取使用 StarTools.get_data_dir()
@@ -29,11 +29,29 @@ class GroupMatePlugin(Star):
         self.data = self._load_data()
 
     def _load_data(self) -> dict:
-        """从持久化文件加载运行数据"""
+        """从持久化文件加载运行数据并进行结构校验"""
+        default_data = {"last_run_time": {}}
         if self.data_file.exists():
             try:
                 with open(self.data_file, encoding="utf-8") as f:
-                    return json.load(f)
+                    loaded = json.load(f)
+
+                # 数据结构校验与清洗：防止脏数据导致运行期异常
+                if not isinstance(loaded, dict):
+                    raise ValueError("JSON 根对象不是字典")
+
+                lrt = loaded.get("last_run_time")
+                if not isinstance(lrt, dict):
+                    loaded["last_run_time"] = {}
+                else:
+                    # 清洗 last_run_time，确保 key 为字符串，value 为数值
+                    cleaned_lrt = {}
+                    for k, v in lrt.items():
+                        if isinstance(v, (int, float)):
+                            cleaned_lrt[str(k)] = v
+                    loaded["last_run_time"] = cleaned_lrt
+
+                return loaded
             except json.JSONDecodeError as e:
                 logger.error(f"[group_mate] 数据文件格式损坏，将进行备份并重置: {e}")
                 try:
@@ -44,11 +62,11 @@ class GroupMatePlugin(Star):
                 except Exception as b_e:
                     logger.error(f"[group_mate] 备份失败: {b_e}")
             except Exception as e:
-                logger.error(f"[group_mate] 加载数据遇到未知错误: {e}")
-        return {"last_run_time": {}}
+                logger.error(f"[group_mate] 加载数据遇到异常: {e}")
+        return default_data
 
     async def _save_data(self):
-        """保存运行数据到持久化文件（需在调用时确保并发安全）"""
+        """保存运行数据到持久化文件（需在外部 lock 保护下调用）"""
         try:
             with open(self.data_file, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
@@ -56,7 +74,7 @@ class GroupMatePlugin(Star):
             logger.error(f"[group_mate] 保存数据失败: {e}")
 
     def _get_conf(self, category: str, key: str, default=None):
-        """层级化配置读取，包含鲁棒性校验与 Clamp 逻辑"""
+        """层级化配置读取，包含鲁棒性校验"""
         val = self.config.get(category, {}).get(key, default)
 
         # 配置项鲁棒性校验：确保概率值在合法区间 [0, 100]
@@ -68,19 +86,26 @@ class GroupMatePlugin(Star):
                 return 5.0
         return val
 
-    def _is_in_cooldown(self, user_id: str) -> tuple[bool, int]:
-        """检查用户是否处于指令冷却期（辅助方法，应在 lock 保护下调用）"""
+    def _get_cd_key(self, event: AstrMessageEvent) -> str:
+        """生成支持多群/多平台隔离的冷却唯一标识"""
+        platform = event.get_platform_id()
+        group = event.get_group_id()
+        user = event.get_sender_id()
+        return f"{platform}:{group}:{user}"
+
+    def _is_in_cooldown(self, cd_key: str) -> tuple[bool, int]:
+        """检查特定标识是否处于指令冷却期（辅助方法，应在 lock 保护下调用）"""
         cd = self._get_conf("basic_settings", "cooldown", 60)
         now = time.time()
-        last_run_time = self.data.get("last_run_time", {})
-        if user_id in last_run_time:
-            elapsed = now - last_run_time[user_id]
+        lrt_dict = self.data.get("last_run_time", {})
+        if cd_key in lrt_dict:
+            elapsed = now - lrt_dict[cd_key]
             if elapsed < cd:
                 return True, int(cd - elapsed)
         return False, 0
 
     async def _get_ai_response(self, category: str, **kwargs) -> str:
-        """核心回复获取逻辑，具备重试与异步非阻塞调用，支持 AI 失败兜底"""
+        """核心回复获取逻辑，具备超时控制与 Providers 状态预检"""
         DEFAULTS = {
             "success_result": {
                 "prompt": "你是一个幽默且擅长牵红线的月老。现在用户 {user} 抽中了群友 {target} 作为今日老婆。请生成一两句恭喜或调侃的话，要简短精炼，不要输出多余的内容。",
@@ -133,7 +158,7 @@ class GroupMatePlugin(Star):
         prompt_template = conf_group.get("prompt") or category_default["prompt"]
         fixed_sentences = conf_group.get("fixed") or category_default["fixed"]
 
-        def safe_format(text: str, vars: dict):
+        def safe_format(text: str, vars: dict) -> str:
             try:
                 return text.format(**vars)
             except Exception as e:
@@ -142,10 +167,6 @@ class GroupMatePlugin(Star):
                 return fixed_sentences[0] if fixed_sentences else "缘分莫测，稍后再试。"
 
         if use_llm:
-            if not prompt_template:
-                return safe_format(random.choice(fixed_sentences), kwargs)
-
-            # 预检：如果没有可用 Provider，直接返回固定语，避免无效循环和休眠
             provider = self.context.provider_manager.get_using_provider(
                 ProviderType.CHAT_COMPLETION
             )
@@ -153,9 +174,12 @@ class GroupMatePlugin(Star):
                 return safe_format(random.choice(fixed_sentences), kwargs)
 
             retry_limit = self._get_conf("basic_settings", "llm_retry_limit", 2)
+            timeout = self._get_conf(
+                "basic_settings", "llm_timeout", 10
+            )  # 增加请求超时控制
+
             for attempt in range(retry_limit + 1):
                 try:
-                    # 循环中实时确认 Provider 状态
                     provider = self.context.provider_manager.get_using_provider(
                         ProviderType.CHAT_COMPLETION
                     )
@@ -163,22 +187,30 @@ class GroupMatePlugin(Star):
                         break
 
                     full_prompt = safe_format(prompt_template, kwargs)
-                    response = await provider.text_chat(prompt=full_prompt)
+                    # 引入 asyncio.wait_for 防止接口挂起拖累插件
+                    response = await asyncio.wait_for(
+                        provider.text_chat(prompt=full_prompt), timeout=timeout
+                    )
                     if response and response.completion_text:
                         return response.completion_text.strip()
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"[group_mate] LLM 请求超时 ({category})，尝试重试..."
+                    )
                 except Exception as e:
                     logger.warning(
                         f"[group_mate] LLM 调用尝试 {attempt + 1} 失败 ({category}): {e}"
                     )
-                    if attempt < retry_limit:
-                        await asyncio.sleep(1)
+
+                if attempt < retry_limit:
+                    await asyncio.sleep(1)
             return safe_format(random.choice(fixed_sentences), kwargs)
         return safe_format(random.choice(fixed_sentences), kwargs)
 
     async def _select_target(
         self, event: AstrMessageEvent, user_id: str
-    ) -> object | None:
-        """从群成员中根据活跃度挑选目标（逻辑解耦）"""
+    ) -> MessageMember | None:
+        """从群成员中根据活跃度挑选目标，优化了时区处理与类型标注"""
         group_id = event.get_group_id()
         platform_id = event.get_platform_id()
         history_size = self._get_conf("basic_settings", "history_size", 200)
@@ -192,9 +224,7 @@ class GroupMatePlugin(Star):
             logger.error(f"[group_mate] 获取群消息历史失败: {e}")
             history = []
 
-        # 2. 活跃度分析与时区标准化
-        # 针对潜在的东八区/本地时间问题，通常框架返回的已是 Aware DateTime，
-        # 如果是 Naive，假设为本地时间并转换至 UTC 进行统一计算。
+        # 2. 活跃度分析与严谨的时区处理
         now_dt = datetime.now(timezone.utc)
         activity_counts = {}
         last_seen = {}
@@ -205,9 +235,13 @@ class GroupMatePlugin(Star):
                 activity_counts[uid] = activity_counts.get(uid, 0) + 1
                 msg_time = msg_item.created_at
                 if msg_time:
+                    # 对于 Naive Datetime，显式使用 replace 赋予 UTC 时区（假设框架返回的是 UTC naive）
+                    # 若需本地时间转换，应先 replace(本地) 再 astimezone(UTC)
                     if msg_time.tzinfo is None:
-                        # naive datetime 时区转换：假定为本地时间转回 UTC
+                        msg_time = msg_time.replace(tzinfo=timezone.utc)
+                    else:
                         msg_time = msg_time.astimezone(timezone.utc)
+
                     if uid not in last_seen or msg_time > last_seen[uid]:
                         last_seen[uid] = msg_time
 
@@ -225,7 +259,7 @@ class GroupMatePlugin(Star):
         if not members:
             return None
 
-        # 4. 分层回溯选择逻辑
+        # 4. 分层逻辑计算
         target_pool = members
         if self._get_conf("basic_settings", "use_multi_tier_fallback", True):
             tier1, tier2 = [], []
@@ -247,7 +281,7 @@ class GroupMatePlugin(Star):
 
     @filter.command("娶群友")
     async def marry(self, event: AstrMessageEvent):
-        """娶一位群友作为老婆/老公。"""
+        """娶一位群友作为老婆/老公。指令状态控制与耗时操作分离以确保吞吐量。"""
         try:
             if event.get_message_type() != MessageType.GROUP_MESSAGE:
                 msg = await self._get_ai_response("not_group_remind")
@@ -256,35 +290,45 @@ class GroupMatePlugin(Star):
 
             user_id = event.get_sender_id()
             user_name = event.get_sender_name()
+            cd_key = self._get_cd_key(event)
 
-            # 指令锁定与并发绕过防护
+            # --- 将网络 I/O 移出锁区域 ---
+            # 1. 第一阶段逻辑锁定（轻量级）
             async with self.lock:
-                in_cd, remain = self._is_in_cooldown(user_id)
+                in_cd, remain = self._is_in_cooldown(cd_key)
                 if in_cd:
-                    msg = await self._get_ai_response(
-                        "cooldown_remind", user=user_name, remain=remain
+                    # 锁内仅做判定，具体 AI 请求移至锁外
+                    pass
+                else:
+                    # 随机失败预判定
+                    prob = (
+                        self._get_conf("basic_settings", "random_fail_probability", 5.0)
+                        / 100.0
                     )
-                    yield event.plain_result(msg)
-                    return
+                    is_failed = prob > 0 and random.random() < prob
+                    if is_failed:
+                        # 立即标记冷却，防止并发绕过
+                        self.data.setdefault("last_run_time", {})[cd_key] = time.time()
+                        await self._save_data()
+                    else:
+                        # 正常流程预标记，随后再释放锁进行耗时计算
+                        self.data.setdefault("last_run_time", {})[cd_key] = time.time()
+                        await self._save_data()
 
-                # 随机失败判定
-                prob = (
-                    self._get_conf("basic_settings", "random_fail_probability", 5.0)
-                    / 100.0
+            # 2. 第二阶段耗时操作（锁外执行）
+            if in_cd:
+                msg = await self._get_ai_response(
+                    "cooldown_remind", user=user_name, remain=remain
                 )
-                if prob > 0 and random.random() < prob:
-                    # 立即更新时间，防止并发绕过
-                    self.data.setdefault("last_run_time", {})[user_id] = time.time()
-                    await self._save_data()
-                    msg = await self._get_ai_response("random_fail", user=user_name)
-                    yield event.plain_result(msg)
-                    return
+                yield event.plain_result(msg)
+                return
 
-                # 正常流程：立即先行更新冷却占位，防止后续耗时操作导致的重入漏洞
-                self.data.setdefault("last_run_time", {})[user_id] = time.time()
-                await self._save_data()
+            if is_failed:
+                msg = await self._get_ai_response("random_fail", user=user_name)
+                yield event.plain_result(msg)
+                return
 
-            # 选定目标（解耦模型）
+            # 选定目标（包含群成员/历史拉取，耗时较高）
             target = await self._select_target(event, user_id)
             if not target:
                 msg = await self._get_ai_response("system_error_remind")
@@ -297,7 +341,6 @@ class GroupMatePlugin(Star):
                 target=target.nickname or target.user_id,
             )
 
-            # 消息链拼装
             chain = [
                 At(qq=user_id),
                 Plain(" "),
@@ -373,7 +416,5 @@ class GroupMatePlugin(Star):
         if cat not in self.config:
             self.config[cat] = {}
         self.config[cat][key] = target_val
-
-        # 显式保存框架配置，确保动态变更持久化
         self.context.config_manager.save_config()
         yield event.plain_result(f"✅ 已将 {action} 设置为 {target_val}，且已持久化。")
