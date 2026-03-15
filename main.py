@@ -34,8 +34,17 @@ class GroupMatePlugin(Star):
             try:
                 with open(self.data_file, encoding="utf-8") as f:
                     return json.load(f)
+            except json.JSONDecodeError as e:
+                logger.error(f"[group_mate] 数据文件格式损坏，将进行备份并重置: {e}")
+                try:
+                    # 发现损坏时备份原文件，防止 _save_data 覆盖导致数据永久丢失
+                    backup_path = self.data_file.with_suffix(".json.bak")
+                    self.data_file.rename(backup_path)
+                    logger.info(f"[group_mate] 已将损坏的数据文件备份至: {backup_path}")
+                except Exception as b_e:
+                    logger.error(f"[group_mate] 备份失败: {b_e}")
             except Exception as e:
-                logger.error(f"[group_mate] 加载数据失败: {e}")
+                logger.error(f"[group_mate] 加载数据遇到未知错误: {e}")
         return {"last_run_time": {}}
 
     async def _save_data(self):
@@ -136,17 +145,27 @@ class GroupMatePlugin(Star):
             if not prompt_template:
                 return safe_format(random.choice(fixed_sentences), kwargs)
 
+            # 预检：如果没有可用 Provider，直接返回固定语，避免无效循环和休眠
+            provider = self.context.provider_manager.get_using_provider(
+                ProviderType.CHAT_COMPLETION
+            )
+            if not provider:
+                return safe_format(random.choice(fixed_sentences), kwargs)
+
             retry_limit = self._get_conf("basic_settings", "llm_retry_limit", 2)
             for attempt in range(retry_limit + 1):
                 try:
+                    # 循环中实时确认 Provider 状态
                     provider = self.context.provider_manager.get_using_provider(
                         ProviderType.CHAT_COMPLETION
                     )
-                    if provider:
-                        full_prompt = safe_format(prompt_template, kwargs)
-                        response = await provider.text_chat(prompt=full_prompt)
-                        if response and response.completion_text:
-                            return response.completion_text.strip()
+                    if not provider:
+                        break
+
+                    full_prompt = safe_format(prompt_template, kwargs)
+                    response = await provider.text_chat(prompt=full_prompt)
+                    if response and response.completion_text:
+                        return response.completion_text.strip()
                 except Exception as e:
                     logger.warning(
                         f"[group_mate] LLM 调用尝试 {attempt + 1} 失败 ({category}): {e}"
