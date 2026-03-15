@@ -75,7 +75,6 @@
 - 娶群友历史记录
 - 发起离婚/询问对方是否同意离婚
 
-
 ---
 
 ## 🤝 贡献与反馈
@@ -84,3 +83,11 @@
 
 - **Author**: WinBSOD
 - **Special Thanks**: 感谢 [liulian-plugin](https://github.com/flyingmangocat/liulian-plugin) 提供的最初灵感。
+
+---
+
+## 📜 许可证
+本项目基于 GNU Affero General Public License v3.0 (AGPL-3.0) 开源，你可以自由使用、修改和分发，但需遵守以下核心规则：
+1. 任何修改后的版本若通过网络提供服务（如作为插件运行），必须向所有用户提供修改后的源代码；
+2. 分发本项目时需保留原版权声明和许可证全文；
+3. 本项目无任何担保，详见 LICENSE 文件。
